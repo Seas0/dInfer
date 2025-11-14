@@ -25,7 +25,7 @@ from lm_eval.api.model import LM
 from lm_eval.__main__ import cli_evaluate
 from lm_eval.api.model import LM
 from lm_eval.api.registry import register_model
-from dinfer.model import FusedOlmoeForCausalLM, LLaDAModelLM, LLaDA2MoeModelLM
+from dinfer.model import LLaDAMoeModelLM, LLaDAModelLM, LLaDA2MoeModelLM
 from dinfer import BlockIteratorFactory, KVCacheFactory
 from dinfer import ThresholdParallelDecoder,CreditThresholdParallelDecoder, HierarchyDecoder, BlockWiseDiffusionLLM, IterSmoothDiffusionLLM, VicinityCacheDiffusionLLM, IterSmoothWithVicinityCacheDiffusionLLM, BlockDiffusionLLM
 from vllm import distributed
@@ -186,7 +186,7 @@ class DInferEvalHarness(LM):
                     config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
                     # load model
                     if 'moe' in model_path:
-                        model = FusedOlmoeForCausalLM(config=config).eval()
+                        model = LLaDAMoeModelLM(config=config).eval()
                         model.load_weights(self.model_path, torch_dtype=torch.bfloat16)
                     else:
                         model = LLaDA2MoeModelLM(config=config).eval()
@@ -469,7 +469,7 @@ class DInferEvalHarness(LM):
 
                 model_config = AutoConfig.from_pretrained(args.model_name, trust_remote_code=True)
                 if 'moe' in args.model_name:
-                    model = FusedOlmoeForCausalLM(config=model_config).eval()
+                    model = LLaDAMoeModelLM(config=model_config).eval()
                     model.load_weights(args.model_name, torch_dtype=torch.bfloat16)
                 elif 'mini' in args.model_name:
                     model = LLaDA2MoeModelLM(config=model_config).eval()

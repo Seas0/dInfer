@@ -669,7 +669,7 @@ class LLaDABlock(nn.Module):
                 from flash_attn import flash_attn_func  # type: ignore
 
                 self.flash_attn_func = flash_attn_func
-            except ModuleNotFoundError:
+            except:
                 pass
 
     def reset_parameters(self):

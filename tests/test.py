@@ -10,7 +10,7 @@ from transformers import AutoTokenizer, AutoModel, AutoConfig
 from vllm.config import CompilationConfig, ParallelConfig
 from vllm.config import VllmConfig, set_current_vllm_config, get_current_vllm_config
 
-from dinfer.model import FusedOlmoeForCausalLM, LLaDAModelLM
+from dinfer.model import LLaDAMoeModelLM, LLaDAModelLM
 from dinfer import BlockWiseDiffusionLLM, VicinityCacheDiffusionLLM, IterSmoothDiffusionLLM, IterSmoothWithVicinityCacheDiffusionLLM, BlockWiseDiffusionLLMWithSP
 from dinfer import ThresholdParallelDecoder, HierarchyDecoder
 from dinfer import DiffusionLLMServing, SamplingParams
@@ -157,7 +157,7 @@ def test_moe_diffusion():
     parallel_config = ParallelConfig(enable_expert_parallel = True)
     with set_current_vllm_config(VllmConfig(parallel_config = parallel_config)):
         model_config = AutoConfig.from_pretrained(moe_model_path, trust_remote_code=True)
-        model = FusedOlmoeForCausalLM(config=model_config).eval()
+        model = LLaDAMoeModelLM(config=model_config).eval()
         model.load_weights(moe_model_path, torch_dtype=torch.bfloat16)
         tokenizer = AutoTokenizer.from_pretrained(moe_model_path, trust_remote_code=True)
         model = model.to(device)
@@ -458,7 +458,7 @@ def test_moe_server(require_init=True):
     parallel_config = ParallelConfig(enable_expert_parallel = True)
     with set_current_vllm_config(VllmConfig(parallel_config = parallel_config)):
         model_config = AutoConfig.from_pretrained(moe_model_path, trust_remote_code=True)
-        model = FusedOlmoeForCausalLM(config=model_config).eval()
+        model = LLaDAMoeModelLM(config=model_config).eval()
         model.load_weights(moe_model_path, torch_dtype=torch.bfloat16)
         model.forward = torch.compile(model.forward, mode='reduce-overhead', fullgraph=False, dynamic=True)
         tokenizer = AutoTokenizer.from_pretrained(moe_model_path, trust_remote_code=True)

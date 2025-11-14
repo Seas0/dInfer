@@ -9,7 +9,7 @@ from transformers import AutoTokenizer, AutoModel, AutoConfig
 from vllm.config import CompilationConfig, ParallelConfig
 from vllm.config import VllmConfig, set_current_vllm_config, get_current_vllm_config
 
-from dinfer.model import FusedOlmoeForCausalLM, LLaDAModelLM
+from dinfer.model import LLaDAModelLM
 from dinfer import BlockWiseDiffusionLLM, VicinityCacheDiffusionLLM, IterSmoothDiffusionLLM, IterSmoothWithVicinityCacheDiffusionLLM, BlockWiseDiffusionLLMWithSP
 from dinfer import ThresholdParallelDecoder, HierarchyDecoder
 from dinfer import DiffusionLLMServing, SamplingParams

@@ -12,7 +12,7 @@ from vllm.forward_context import set_forward_context
 import json
 
 from dinfer.decoding.generate_fastdllm import generate_fastdllm
-from dinfer.model import LLaDAModelLM, FusedOlmoeForCausalLM
+from dinfer.model import LLaDAModelLM, LLaDAMoeModelLM
 
 os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 
@@ -106,7 +106,7 @@ def main(world_size, rank, gpu_id, args):
         print("EP Enabled:", vllm_config.parallel_config.enable_expert_parallel)
 
         model_config = AutoConfig.from_pretrained(args.model_name, trust_remote_code=True)
-        model = FusedOlmoeForCausalLM(config=model_config).eval()
+        model = LLaDAMoeModelLM(config=model_config).eval()
         model.load_weights(args.model_name, torch_dtype=torch.bfloat16)
         if args.tp_size>1 and args.use_tp:
             print('enabling tp')

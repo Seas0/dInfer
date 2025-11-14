@@ -19,7 +19,7 @@ from multiprocessing import Process
 from pathlib import Path
 import pytest
 
-from dinfer.model import BailingMoeV2ForCausalLM, LLaDA2MoeModelLM
+from dinfer.model import LLaDA2MoeModelLM
 from dinfer import BlockIteratorFactory, KVCacheFactory, SamplingParams, DiffusionLLMServing
 from dinfer import ThresholdParallelDecoder, BlockDiffusionLLMAttnmask, BlockDiffusionLLM
 import difflib

@@ -46,49 +46,42 @@ dInfer supports multiple dLLM variants, including LLaDA and LLaDA-MoE.
 dInfer supports multiple diffusion language model variants with different architectures and sizes. Below are the HuggingFace model links and their corresponding implementation files:
 
 ### LLaDA2.0
-**Implementation**: [modeling_llada2_moe.py](python/dinfer/model/modeling_llada2_moe.py)
+
+**Features**:
+- Sparse Mixture-of-Experts with 64 experts
+- Trained using Block Diffusion to improve throughput and stability
+
+**Implementation**: [LLaDA2MoeModelLM](python/dinfer/model/modeling_llada2_moe.py)
 
 | Model | Size | HuggingFace Link | Description |
 |-------|------|------------------|-------------|
 | LLaDA2.0-mini-preview | 16B | [inclusionAI/LLaDA2.0-mini-preview](https://huggingface.co/inclusionAI/LLaDA2.0-mini-preview) | MoE dLLM focused on efficient reasoning and tool use |
 | LLaDA2.0-flash-preview | 100B | [inclusionAI/LLaDA2.0-flash-preview](https://huggingface.co/inclusionAI/LLaDA2.0-flash-preview) | Large MoE dLLM targeting advanced code/math reasoning |
 
-**Features**:
-- Trained using Block Diffusion to improve throughput and stability
-- Supports tool calling and complex agent-based task execution
-- Excels at complex mathematical reasoning and code generation
-- Supports both Expert Parallelism (EP) and Tensor Parallelism (TP)
-- **Decoding algorithms**: Hierarchical, Credit, Threshold
-
 ### LLaDA-MoE Models (Mixture-of-Experts)
 
-**Implementation**: [modeling_fused_olmoe.py](python/dinfer/model/modeling_fused_olmoe.py)
+**Features**:
+- Sparse Mixture-of-Experts with 64 experts
+
+**Implementation**: [LLaDAMoeModelLM](python/dinfer/model/modeling_fused_olmoe.py)
 
 | Model | Size | HuggingFace Link | Description |
 |-------|------|------------------|-------------|
 | LLaDA-MoE-7B-A1B-Base | 7B | [inclusionAI/LLaDA-MoE-7B-A1B-Base](https://huggingface.co/inclusionAI/LLaDA-MoE-7B-A1B-Base) | Pretrained MoE dLLM |
 | LLaDA-MoE-7B-A1B-Instruct | 7B | [inclusionAI/LLaDA-MoE-7B-A1B-Instruct](https://huggingface.co/inclusionAI/LLaDA-MoE-7B-A1B-Instruct) | Instruction-tuned MoE variant |
 
-**Features**:
-- Sparse Mixture-of-Experts with 64 experts
-- FusedMoE optimization for efficient inference
-- Support both Expert Parallelism (EP) and Tensor Parallelism (TP)
-- **Decoding algorithms**: Hierarchical, Credit, Threshold
-
 ### LLaDA Models (Dense)
 
-**Implementation**: [modeling_llada.py](python/dinfer/model/modeling_llada.py)
+**Features**:
+- Dense transformer architecture
+
+**Implementation**: [LLaDAModelLM](python/dinfer/model/modeling_llada.py)
 
 | Model | Size | HuggingFace Link | Description |
 |-------|------|------------------|-------------|
 | LLaDA-8B-Base | 8B | [GSAI-ML/LLaDA-8B-Base](https://huggingface.co/GSAI-ML/LLaDA-8B-Base) | Pretrained dense dLLM |
 | LLaDA-8B-Instruct | 8B | [GSAI-ML/LLaDA-8B-Instruct](https://huggingface.co/GSAI-ML/LLaDA-8B-Instruct) | SFT instruction-following variant |
 | LLaDA-1.5 | 8B | [GSAI-ML/LLaDA-1.5](https://huggingface.co/GSAI-ML/LLaDA-1.5) | LLaDA-8B aligned with VRPO |
-
-**Features**:
-- Dense transformer architecture
-- Optimized for single-GPU and multi-GPU inference
-- **Decoding algorithms**: Hierarchical, Credit, Threshold
 
 ## Quick Start
 

@@ -11,7 +11,7 @@ from vllm.config import VllmConfig, set_current_vllm_config, get_current_vllm_co
 from vllm.forward_context import set_forward_context
 import json
 
-from dinfer.model import FusedOlmoeForCausalLM, LLaDAModelLM, LLaDA2MoeModelLM
+from dinfer.model import LLaDAMoeModelLM, LLaDAModelLM, LLaDA2MoeModelLM
 from dinfer import BlockIteratorFactory, KVCacheFactory
 from dinfer import ThresholdParallelDecoder,CreditThresholdParallelDecoder, HierarchyDecoder, BlockWiseDiffusionLLM, IterSmoothDiffusionLLM, VicinityCacheDiffusionLLM, IterSmoothWithVicinityCacheDiffusionLLM, BlockDiffusionLLM
 import random
@@ -113,7 +113,7 @@ def main(world_size, rank, gpu_id, args):
 
         model_config = AutoConfig.from_pretrained(args.model_name, trust_remote_code=True)
         if args.model_type=='llada_moe':
-            model = FusedOlmoeForCausalLM(config=model_config).eval()
+            model = LLaDAMoeModelLM(config=model_config).eval()
             model.load_weights(args.model_name, torch_dtype=torch.bfloat16)
             mask_id = 156895
             eos_id = 156892
