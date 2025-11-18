@@ -22,8 +22,7 @@ import difflib
 
 #model_path = '/mnt/dllm/luxiaocheng/moe-mini-v2-e256-1009-fp8-ml4-grouprouter-20T-mdmcpt-block-diffusion-bl32-4k-noshift-100B'
 # model_path = '/mnt/infra/dulun.dl/models/dllm-mini/block-diffusion-sft-2k-v2-full-bd/LLaDA2-mini-preview-ep4-v0'
-#model_path = '/mnt/infra/dulun.dl/models/dllm-mini/block-diffusion-sft-2k-v2-full-bd/LLaDA2-mini-preview-ep4-v0'
-model_path = '/mnt/dllm/jlzhou/models/llada2-mini-bd/sft-2k-v3/checkpoint-11872_fusemoe/'
+model_path = '/mnt/infra/dulun.dl/models/LLaDA2.0-MoE-preview/LLaDA2.0-Mini-fusemoe/checkpoint-14845_fusemoe'
 dataset_path = '/ossfs/workspace/dumped_prompts'
 dataset='openai_humaneval'
 

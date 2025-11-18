@@ -28,7 +28,6 @@ from test_generate import IterSmoothDiffusionLLM as IterSmoothDiffusionLLM_test
 from test_generate import IterSmoothWithVicinityCacheDiffusionLLM as IterSmoothWithVicinityCacheDiffusionLLM_test
 
 model_path = "/mnt/infra/myx/models/LLaDA-1.5/"
-# model_path = "/data/myx/llm/vllm/model/LLaDA-1_5/"
 
 def get_prompts(tokenizer, mask_id, device, num=1):
     prompt = "Lily can run 12 kilometers per hour for 4 hours. After that, she can run 6 kilometers per hour. How many kilometers can she run in 8 hours? "

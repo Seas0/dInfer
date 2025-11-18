@@ -30,7 +30,7 @@ os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 from test_generate import IterSmoothDiffusionLLM as IterSmoothDiffusionLLM_test
 from test_generate import IterSmoothWithVicinityCacheDiffusionLLM as IterSmoothWithVicinityCacheDiffusionLLM_test
 
-moe_model_path = '/mnt/dllm/fengling/moe/workdir/7bA1b_anneal_15t_0827_500B_further_8k_enneal_train_4k_ep3_v7_1e-5/step45567_converted_hf_fusemoe'
+moe_model_path = '/mnt/infra/dulun.dl/models/LLaDA-MoE/fusemoe/step45567_converted_hf_fusemoe'
 # moe_model_path = '/data/dulun/models/llada-moe-sft/llada-moe-sft-model/7bA1b_anneal_19t_500B_further_8k_anneal_train_4k_ep3_v8p5/step45567_converted_hf_fusemoe/'
 
 def get_prompts(tokenizer, mask_id, device, num=1):
