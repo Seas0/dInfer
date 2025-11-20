@@ -396,11 +396,12 @@ class FixedParallelDecoder(ParallelDecoder):
         super().__init__(temperature, remasking, mask_id)
         self.steps = steps
         self.iter = 0
+        self.mask_id = mask_id
 
     def block_init(self, block_x, block_id):
         # TODO(zhengda) we need to handle steps correctly here when the distributed version changes the gen length.
-        block_mask_index = block_x == mask_id
-        self.num_transfer_tokens = get_num_transfer_tokens(block_mask_index, steps)
+        block_mask_index = block_x == self.mask_id
+        self.num_transfer_tokens = get_num_transfer_tokens(block_mask_index, self.steps)
         self.iter = 0
 
     def decode(self, logits, block_start, block_end, x, iter_threshold = None):
@@ -480,7 +481,6 @@ class HierarchyDecoder(ParallelDecoder):
 
     def block_init(self, block_x, block_id):
         # TODO(zhengda) we need to handle steps correctly here when the distributed version changes the gen length.
-        block_mask_index = block_x == self.mask_id
         self.iter = 0
 
     def decode(self, logits, block_start, block_end, x, iter_threshold = None):
@@ -491,7 +491,6 @@ class HierarchyDecoder(ParallelDecoder):
         mask_index = (x[:, block_start:block_end] == self.mask_id)
         assert mask_index.shape[1] == logits.shape[1]
 
-        curr_x = x[:, block_start:block_end]
         x0, transfer_index = self.get_transfer_index(logits, mask_index, iter_threshold)
         self.iter += 1
         transfer_index = torch.logical_and(transfer_index, mask_index)
