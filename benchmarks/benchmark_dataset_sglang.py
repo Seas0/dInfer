@@ -21,13 +21,6 @@ os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 # os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 
 
-
-def setup_distributed(rank, world_size):
-    os.environ['MASTER_ADDR'] = '127.0.0.1'
-    os.environ['MASTER_PORT'] = '12345'
-    print(f'rank={rank}, world size={world_size}')
-    dist.init_process_group(backend="nccl", rank=rank, world_size=world_size)
-
 bucket_size = 32
 used_buckets = []
 
@@ -115,7 +108,7 @@ def main(world_size, rank, gpu_id, args):
     os.environ['MASTER_ADDR'] = 'localhost'
     os.environ['MASTER_PORT'] = args.port
     distributed.init_distributed_environment(world_size, rank, 'env://', rank, 'nccl')
-    distributed.initialize_model_parallel(args.tp_size, args.tp_size, 1, backend='nccl')
+    distributed.initialize_model_parallel(args.tp_size, args.ep_size, 1, backend='nccl')
     print("[Loading model]")
 
     from sglang.srt.layers.dp_attention import initialize_dp_attention
@@ -182,7 +175,7 @@ def main(world_size, rank, gpu_id, args):
             else:
                 dllm = BlockWiseDiffusionLLM(model, decoder, BlockIteratorFactory(start_block_align=True), cache_factory=cache_factory, early_stop=True, use_shift=args.use_shift)
     else:
-        dllm = BlockDiffusionLLM(model, decoder, BlockIteratorFactory(start_block_align=True, use_block_diffusion=True), cache_factory=cache_factory, early_stop=True, maximum_unroll=2, expected_tpf=15, backend='sglang')
+        dllm = BlockDiffusionLLM(model, decoder, BlockIteratorFactory(start_block_align=True, use_block_diffusion=True), cache_factory=cache_factory, early_stop=True, maximum_unroll=1, expected_tpf=15, backend='sglang')
     # warmup for decoding algorithms
     input_ids = torch.arange(64, dtype=torch.long, device=device).unsqueeze(0)
     dllm.generate(input_ids, gen_length=args.gen_len, block_length=args.block_length)
@@ -322,6 +315,7 @@ if __name__ == '__main__':
     parser.add_argument('--use_shift', action='store_true')
     parser.add_argument('--use_bd', action='store_true')
     parser.add_argument('--model_type', type=str, default='mini')
+    parser.add_argument('--ep_size', type=int, default=1)
     parser.add_argument('--use_quant' ,action='store_true')
     parser.add_argument('--config', type=int, default=0)
     args = parser.parse_args()

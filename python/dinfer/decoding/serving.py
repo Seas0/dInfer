@@ -51,7 +51,7 @@ class SamplingParams:
     """
     def __init__(self, threshold=0.9, low_threshold=0.6, cache='dual', temperature=0., early_stop=True, cont_weight=0.3,
             prefix_look=16, after_look=16, warmup_steps=4, enable_torch_compile=True, mask_id=156895, eos_id=156892, 
-            parallel_decoding='threshold', use_credit=False, use_bd=True, max_length=4096):
+            parallel_decoding='threshold', use_credit=False, use_bd=True, max_length=4096, ep_size=1):
         self.threshold = threshold
         self.low_threshold = low_threshold
         self.cache = cache
@@ -68,6 +68,7 @@ class SamplingParams:
         self.use_credit = use_credit
         self.use_bd = use_bd
         self.max_length = max_length
+        self.ep_size = ep_size
 
 def init_generator(model, sample_params, backend='vllm', max_length=4096):
     if sample_params.parallel_decoding == 'threshold':
@@ -143,7 +144,7 @@ def _sglang_llada2_server_process(model_path, sample_params, world_size, rank, g
     os.environ['MASTER_PORT'] = str(master_port)
     from sglang.srt import distributed
     distributed.init_distributed_environment(world_size, rank, 'env://', rank, 'nccl')
-    distributed.initialize_model_parallel(world_size, world_size, 1, backend='nccl')
+    distributed.initialize_model_parallel(world_size, sample_params.ep_size, 1, backend='nccl')
     from sglang.srt.server_args import ServerArgs
     from sglang.srt.layers.moe import initialize_moe_config
     from ..model.modeling_llada2_moe_sglang import LLaDA2SGLangLM

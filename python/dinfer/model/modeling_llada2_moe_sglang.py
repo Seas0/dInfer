@@ -76,6 +76,10 @@ from sglang.srt.distributed import (
     get_tensor_model_parallel_world_size,
     parallel_state, divide,
     tensor_model_parallel_all_reduce,
+    get_moe_expert_parallel_world_size,
+    get_moe_expert_parallel_rank,
+    get_moe_tensor_parallel_world_size,
+    get_moe_tensor_parallel_rank,
 )
 from sglang.srt.eplb.expert_distribution import get_global_expert_distribution_recorder
 from sglang.srt.eplb.expert_location import ModelConfigForExpertLocation
@@ -712,14 +716,16 @@ class LLaDA2Attention(nn.Module):
         attn_tp_size = get_attention_tp_size()
 
         assert self.total_num_heads % attn_tp_size == 0
-        assert self.total_kv_heads % attn_tp_size == 0
         assert self.total_num_heads >= self.total_kv_heads
+        if attn_tp_size>self.total_kv_heads:
+            assert attn_tp_size%self.total_kv_heads==0
 
         self.num_heads = self.total_num_heads // attn_tp_size
         self.head_dim = config.head_dim if hasattr(config, 'head_dim') else (self.hidden_size // self.total_num_heads)
         self.q_size = self.head_dim * self.num_heads
 
-        self.num_kv_heads = self.total_kv_heads // attn_tp_size
+        self.num_kv_heads = max(1, self.total_kv_heads // attn_tp_size)
+        self.total_kv_heads = self.num_kv_heads*attn_tp_size
         self.kv_size = max(1, self.num_kv_heads * self.head_dim)
 
         self.num_key_value_groups = self.num_heads // self.num_kv_heads
@@ -1325,8 +1331,8 @@ class LLaDA2SGLangLM(nn.Module):
                             if self.quant_config is None 
                             else value[:, tp_rank * part_size : (tp_rank + 1) * part_size].contiguous()     # this fix stride issue
                         )  
-                    assert weights[key].shape == params_dict[key].shape
-                    # print('shape mismatch fixed:', key, weights[key].shape, params_dict[key].shape)
+                    if weights[key].shape != params_dict[key].shape:
+                        print('shape mismatch fixed:', key, weights[key].shape, params_dict[key].shape)
                 else:
                     hidden_size = self.config.hidden_size
                     total_num_heads = self.config.num_attention_heads
@@ -1334,10 +1340,17 @@ class LLaDA2SGLangLM(nn.Module):
                     q_dim = hidden_size
                     q_part = q_dim // tp_size
                     q_weight = value[tp_rank * q_part : (tp_rank + 1) * q_part]
-                    kv_dim = hidden_size * total_kv_heads // total_num_heads
-                    kv_part = kv_dim // tp_size
-                    k_weight = value[q_dim + tp_rank * kv_part : q_dim + (tp_rank + 1) * kv_part]
-                    v_weight = value[q_dim + kv_dim + tp_rank * kv_part : q_dim + kv_dim + (tp_rank + 1) * kv_part]
+                    if tp_size > total_kv_heads:
+                        n_replica = tp_size//total_kv_heads
+                        kv_dim = hidden_size * total_kv_heads // total_num_heads
+                        kv_part = kv_dim // total_kv_heads
+                        k_weight = value[q_dim + (tp_rank//n_replica) * kv_part : q_dim + ((tp_rank//n_replica) + 1) * kv_part]
+                        v_weight = value[q_dim + kv_dim + (tp_rank//n_replica) * kv_part : q_dim + kv_dim + ((tp_rank//n_replica) + 1) * kv_part]
+                    else:
+                        kv_dim = hidden_size * total_kv_heads // total_num_heads
+                        kv_part = kv_dim // tp_size
+                        k_weight = value[q_dim + tp_rank * kv_part : q_dim + (tp_rank + 1) * kv_part]
+                        v_weight = value[q_dim + kv_dim + tp_rank * kv_part : q_dim + kv_dim + (tp_rank + 1) * kv_part]
                     weights[key] = torch.cat([q_weight, k_weight, v_weight], dim=0)
                     assert weights[key].shape == params_dict[key].shape
 
@@ -1366,7 +1379,7 @@ class LLaDA2SGLangLM(nn.Module):
                 and isinstance(layer.mlp, LLaDA2SparseMoeBlock)
             }
     
-    def _update_state_dict_for_fusemoe_quant(self, state_dict, tp_rank, tp_size, num_layers, dtype, per_gpu_expert_mapping, per_gpu_inverse_mapping, device):
+    def _update_state_dict_for_fusemoe_quant(self, state_dict, num_layers, dtype, per_gpu_expert_mapping, per_gpu_inverse_mapping, device):
         new_state_dict = {}
         gate_projs = [{} for _ in range(num_layers)]
         gate_input_scales = [{} for _ in range(num_layers)]
@@ -1376,6 +1389,10 @@ class LLaDA2SGLangLM(nn.Module):
         down_projs = [{} for _ in range(num_layers)]
         down_input_scales = [{} for _ in range(num_layers)]
         down_weight_scales = [{} for _ in range(num_layers)]
+        tp_rank = get_tensor_model_parallel_rank()
+        tp_size = get_tensor_model_parallel_world_size()
+        ep_rank = get_moe_expert_parallel_rank()
+        ep_size = get_moe_expert_parallel_world_size()
         for key, value in tqdm.tqdm(state_dict.items()):
             if ".mlp.experts." in key:
                 layer_id = int(key.split(".mlp.experts.")[0].split(".")[-1])
@@ -1528,11 +1545,16 @@ class LLaDA2SGLangLM(nn.Module):
                 buf.data = buf.data.to(dtype)
 
 
-    def _update_state_dict_for_fusemoe(self, state_dict, tp_rank, tp_size, num_layers, dtype, per_gpu_expert_mapping, per_gpu_inverse_mapping, device):
+    def _update_state_dict_for_fusemoe(self, state_dict, num_layers, dtype, per_gpu_expert_mapping, per_gpu_inverse_mapping, device):
         new_state_dict = {}
         gate_projs = [{} for _ in range(num_layers)]
         up_projs = [{} for _ in range(num_layers)]
         down_projs = [{} for _ in range(num_layers)]
+
+        tp_rank = get_tensor_model_parallel_rank()
+        tp_size = get_tensor_model_parallel_world_size()
+        moe_tp_rank = get_moe_tensor_parallel_rank()
+        moe_tp_size = get_moe_tensor_parallel_world_size()
         for key, value in tqdm.tqdm(state_dict.items()):
             if ".mlp.experts." in key:
                 layer_id = int(key.split(".mlp.experts.")[0].split(".")[-1])
@@ -1552,11 +1574,8 @@ class LLaDA2SGLangLM(nn.Module):
             w13_weight = []
             w2_weight = []
             if f"model.layers.{layer_id}.mlp.w1" in state_dict.keys():
-                ep_rank = get_tensor_model_parallel_rank()
-                ep_size = get_tensor_model_parallel_world_size()
-                size = divide(state_dict[f"model.layers.{layer_id}.mlp.w1"].shape[0], ep_size)
-                new_state_dict[f"model.layers.{layer_id}.mlp.experts.w13_weight"] = state_dict[f"model.layers.{layer_id}.mlp.w1"][per_gpu_expert_mapping[layer_id]].contiguous()
-                new_state_dict[f"model.layers.{layer_id}.mlp.experts.w2_weight"] = state_dict[f"model.layers.{layer_id}.mlp.w2"][per_gpu_expert_mapping[layer_id]].contiguous()
+                new_state_dict[f"model.layers.{layer_id}.mlp.experts.w13_weight"] = self._tp_split(state_dict[f"model.layers.{layer_id}.mlp.w1"][per_gpu_expert_mapping[layer_id]], dim=1, rank=moe_tp_rank, world=moe_tp_size, is_w13=True).contiguous()
+                new_state_dict[f"model.layers.{layer_id}.mlp.experts.w2_weight"] = self._tp_split(state_dict[f"model.layers.{layer_id}.mlp.w2"][per_gpu_expert_mapping[layer_id]], dim=2, rank=moe_tp_rank, world=moe_tp_size).contiguous()
                 del new_state_dict[f"model.layers.{layer_id}.mlp.w1"]
                 del new_state_dict[f"model.layers.{layer_id}.mlp.w2"]
                 self.model.layers[layer_id].mlp.experts.expert_map_cpu = per_gpu_inverse_mapping[layer_id]
@@ -1569,8 +1588,8 @@ class LLaDA2SGLangLM(nn.Module):
                     down_proj = down_projs[layer_id][expert_id].to(device)
                     w13_weight.append(torch.cat([gate_proj, up_proj], dim=0))
                     w2_weight.append(down_proj)
-                w13_weight = torch.stack(w13_weight, dim=0)
-                w2_weight = torch.stack(w2_weight, dim=0)
+                w13_weight = self._tp_split(torch.stack(w13_weight, dim=0), dim=1, rank=moe_tp_rank, world=moe_tp_size, is_w13=True)
+                w2_weight = self._tp_split(torch.stack(w2_weight, dim=0), dim=2, rank=moe_tp_rank, world=moe_tp_size)
 
                 new_state_dict[f"model.layers.{layer_id}.mlp.experts.w13_weight"] = w13_weight.contiguous()
                 new_state_dict[f"model.layers.{layer_id}.mlp.experts.w2_weight"] = w2_weight.contiguous()
@@ -1604,15 +1623,29 @@ class LLaDA2SGLangLM(nn.Module):
             else:
                 param.data = param.data.to(dtype)
 
+    def _tp_split(self, tensor: torch.Tensor, dim: int, rank: int, world: int, is_w13=False):
+        """把 tensor 按 dim 切成 world 份，返回 rank 对应的那份"""
+        if world == 1:
+            return tensor
+        if is_w13:
+            shard_size = tensor.size(dim) // 2
+            size = shard_size // world
+            w1 = tensor.narrow(dim, rank * size, size)
+            w3 = tensor.narrow(dim, shard_size + rank * size, size)
+            return torch.cat([w1, w3], dim=dim)
+        else:
+            size = tensor.size(dim) // world
+            return tensor.narrow(dim, rank * size, size)
 
     def load_state_dict(self, model_dir, strict=True, dtype=torch.bfloat16, device=None):
         num_experts = self.config.num_experts
         moe_intermediate_size = self.config.moe_intermediate_size
         num_layers = self.config.num_hidden_layers
-        ep_rank = get_tensor_model_parallel_rank()
-        ep_size = get_tensor_model_parallel_world_size()
-        expert_start = ep_rank * num_experts // ep_size
-        expert_end = (ep_rank + 1) * num_experts // ep_size
+        tp_rank = get_tensor_model_parallel_rank()
+        tp_size = get_tensor_model_parallel_world_size()
+        ep_rank = get_moe_expert_parallel_rank()
+        ep_size = get_moe_expert_parallel_world_size()
+
         index_path = Path(model_dir) / "model.safetensors.index.json"
         with open(index_path, "r") as f:
             index = json.load(f)
@@ -1621,8 +1654,6 @@ class LLaDA2SGLangLM(nn.Module):
         shard_files = {v for v in weight_map.values()}
 
         state_dict = {}
-        ep_rank = get_tensor_model_parallel_rank()
-        ep_size = get_tensor_model_parallel_world_size()
         if num_layers == 20:
             expert_map_path = Path(self.expert_map_path+'/mini_expert_map_'+str(ep_size)+'.pt')
         else:
@@ -1661,11 +1692,10 @@ class LLaDA2SGLangLM(nn.Module):
                         
                 state_dict.update(file_state_dict)
 
-        tp_rank, tp_size = ep_rank, ep_size
         if self.quant_config is not None:
-            self._update_state_dict_for_fusemoe_quant(state_dict, tp_rank, tp_size, num_layers, dtype, per_gpu_expert_mapping, per_gpu_inverse_mapping, device)
+            self._update_state_dict_for_fusemoe_quant(state_dict, num_layers, dtype, per_gpu_expert_mapping, per_gpu_inverse_mapping, device)
         else:
-            self._update_state_dict_for_fusemoe(state_dict, tp_rank, tp_size, num_layers, dtype, per_gpu_expert_mapping, per_gpu_inverse_mapping, device)
+            self._update_state_dict_for_fusemoe(state_dict, num_layers, dtype, per_gpu_expert_mapping, per_gpu_inverse_mapping, device)
 
 
 

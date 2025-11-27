@@ -289,7 +289,7 @@ class CudaGraphRunner:
             num_kv_heads = self.model_runner.model.config.num_key_value_heads
             num_heads = self.model_runner.model.config.num_attention_heads
             head_dim = self.model_runner.model.config.hidden_size // num_heads
-            self.past_key_values = torch.zeros((num_layers, 2, self.max_bs, num_kv_heads//self.tp_size, self.model_runner.max_length, head_dim), dtype=torch.bfloat16)
+            self.past_key_values = torch.zeros((num_layers, 2, self.max_bs, max(1, num_kv_heads//self.tp_size), self.model_runner.max_length, head_dim), dtype=torch.bfloat16)
             self.attention_mask = torch.zeros((self.max_bs, self.model_runner.max_length, self.model_runner.max_length), dtype=torch.bool)
             self.attention_mask[0, 0, 0] = True # make sure self.attention_mask is not all False or all True to avoid potential op select problem
         # Capture
