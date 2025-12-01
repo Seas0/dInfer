@@ -78,8 +78,9 @@ def warmup_cudagraph(rank, device, dllm, args):
     else:
         iterator = used_buckets
     offset = 0
+    vocab_size = 156896 if args.model_type in ['llada_moe', 'llada2'] else 126464
     for i in iterator:   
-        input_ids = torch.randint(0, 140000, (batch_size, i - args.gen_len+offset), dtype=torch.long, device=device)
+        input_ids = torch.randint(0, vocab_size, (batch_size, i - args.gen_len+offset), dtype=torch.long, device=device)
         dllm.generate(input_ids, gen_length=args.gen_len, block_length=args.block_length)
 
 def cut_eos(data, eos_id=156892):
@@ -298,7 +299,7 @@ if __name__ == '__main__':
     parser.add_argument('--output_dir', type=str, default='/ossfs/workspace/detailed_results_0917')
     parser.add_argument('--use_shift', action='store_true')
     parser.add_argument('--use_bd', action='store_true')
-    parser.add_argument('--model_type', type=str, default='llada2',
+    parser.add_argument('--model_type', type=str, default='llada',
         help="llada2 (for llada2-mini or llada2-flash) | llada_moe (for llada-moe) | llada (for llada or llada-1.5)")
     parser.add_argument('--config', type=int, default=0)
     args = parser.parse_args()

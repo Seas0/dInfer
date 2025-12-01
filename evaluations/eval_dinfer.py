@@ -4,7 +4,6 @@ This file is inspired by the code from https://github.com/NVlabs/Fast-dLLM
 import accelerate
 import torch
 import random
-import numpy as np
 import torch.nn.functional as F
 from datasets import Dataset
 from tqdm import tqdm, trange
@@ -64,6 +63,9 @@ class EvalConfig:
     use_compile: bool = True
     use_bd: bool = False
     use_shift: bool = False
+    model_type: str = 'llada'
+    vocab_size: int = 156896
+    master_port: int = 23456
 
 def set_seed(seed):
     torch.manual_seed(seed)
@@ -82,7 +84,7 @@ class DInferEvalHarness(LM):
         mask_id=126336,
         eos_id=126081,
         max_length=4096,
-        batch_size=1,
+        batch_size=2,
         mc_num=128,
         is_check_greedy=True,
         gen_length=1024,
@@ -99,13 +101,14 @@ class DInferEvalHarness(LM):
         tp_size: int=1,
         parallel = 'dp',
         use_compile = True,
-        master_port = '23456',
+        master_port = 23456,
         use_cudagraph = True,
         gpus = '0,1,2,3',
         use_bd = False,
         prefix_look = 0,
         after_look = 0,
-        use_shift = True,
+        use_shift = False,
+        model_type = 'llada',
         **kwargs
     ):
 
@@ -142,13 +145,23 @@ class DInferEvalHarness(LM):
         self.use_bd = use_bd
         self.kwargs = kwargs
         self.use_shift = use_shift
+        self.model_type = model_type
 
-        if "moe" or "mini" in model_path:
+        if self.model_type == 'llada_moe':
             self.mask_id = 156895
             self.eos_id = 156892
+            self.vocab_size = 156896
             self.is_moe = True
-        else:
+        elif self.model_type == 'llada2': 
+            self.mask_id = 156895
+            self.eos_id = 156892
+            self.vocab_size = 156896
+            self.is_moe = True
+        elif self.model_type == 'llada':
+            self.vocab_size = 126464
             self.is_moe = False
+        else:
+            raise ValueError('model type not supported')
 
         accelerator = accelerate.Accelerator()
         if accelerator.num_processes > 1:
@@ -173,30 +186,28 @@ class DInferEvalHarness(LM):
                                       mask_id=self.mask_id, eos_id=self.eos_id)
         if parallel == 'dp':
             self.device= torch.device(device)
-            if "moe" or "mini" in model_path:
-                # initialize tensor parallel but don't use it
-                os.environ['MASTER_ADDR'] = 'localhost'
-                os.environ['MASTER_PORT'] = '1234'+str(self.rank)
-                distributed.init_distributed_environment(1, 0, 'env://', 0, 'nccl')
-                distributed.initialize_model_parallel(1, backend='nccl')
-                parallel_config = ParallelConfig(enable_expert_parallel = True)
-                with set_current_vllm_config(VllmConfig(parallel_config = parallel_config)):
-                    vllm_config = get_current_vllm_config()
-                    print("EP Enabled:", vllm_config.parallel_config.enable_expert_parallel)
-                    config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
-                    # load model
-                    if 'moe' in model_path:
-                        model = LLaDAMoeModelLM(config=config).eval()
-                        model.load_weights(self.model_path, torch_dtype=torch.bfloat16)
-                    else:
-                        model = LLaDA2MoeModelLM(config=config).eval()
-                        model.load_weights(self.model_path, torch_dtype=torch.bfloat16)
-                    self.tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
-                    self.vllm_config = vllm_config
-            else:
+            self.tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+            os.environ['MASTER_ADDR'] = 'localhost'
+            os.environ['MASTER_PORT'] = str(self.master_port + self.rank)
+            distributed.init_distributed_environment(1, 0, 'env://', 0, 'nccl')
+            distributed.initialize_model_parallel(1, backend='nccl')
+            parallel_config = ParallelConfig(enable_expert_parallel = True)
+            with set_current_vllm_config(VllmConfig(parallel_config = parallel_config)):
+                vllm_config = get_current_vllm_config()
+                print("EP Enabled:", vllm_config.parallel_config.enable_expert_parallel)
                 config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
-                config.flash_attention = True
-                self.model = LLaDA2MoeModelLM.from_pretrained(model_path, torch_dtype=torch.bfloat16, config=config).eval()
+                # load model
+                if self.model_type == 'llada_moe':
+                    self.model = LLaDAMoeModelLM(config=config).eval()
+                    self.model.load_weights(self.model_path, torch_dtype=torch.bfloat16)
+                elif self.model_type == 'llada2':
+                    self.model = LLaDA2MoeModelLM(config=config).eval()
+                    self.model.load_weights(self.model_path, torch_dtype=torch.bfloat16)
+                elif self.model_type == 'llada':
+                    self.model = LLaDAModelLM.from_pretrained(model_path, torch_dtype=torch.bfloat16, init_device=str(device)).eval()
+                else:
+                    raise ValueError('model type not supported')
+                self.vllm_config = vllm_config
 
             
             if self.accelerator is not None:
@@ -216,7 +227,7 @@ class DInferEvalHarness(LM):
                 cache_factory=KVCacheFactory(self.cache, is_bd_model=self.use_bd)
             else:
                 cache_factory=None
-            use_sw = self.prefix_look > 0 or self.after_look > 0 or self.warmup_times > 0
+            use_sw = self.cache != '' and (self.prefix_look > 0 or self.after_look > 0 or self.warmup_times > 0 )
             if not self.use_bd:
                 if self.cont_weight>0:
                     if use_sw:
@@ -425,7 +436,7 @@ class DInferEvalHarness(LM):
                 padded_gen_lens.append(padded_length - input_ids.shape[1])
             return padded_gen_lens
 
-        def warmup_cudagraph(rank, device, dllm, gen_len, block_length, batch_size):
+        def warmup_cudagraph(rank, device, dllm, gen_len, block_length, batch_size, vocab_size):
             if rank==0:
                 print('warmup')
                 print(used_buckets)
@@ -434,7 +445,7 @@ class DInferEvalHarness(LM):
                 iterator = used_buckets
             offset = 0
             for i in iterator:   
-                input_ids = torch.randint(0, 140000, (batch_size, i - gen_len+offset), dtype=torch.long, device=device)
+                input_ids = torch.randint(0, vocab_size, (batch_size, i - gen_len+offset), dtype=torch.long, device=device)
                 dllm.generate(input_ids, gen_length=gen_len, block_length=block_length)
         
         def cut_eos(data, eos_id=156892):
@@ -457,7 +468,7 @@ class DInferEvalHarness(LM):
 
             from vllm import distributed
             os.environ['MASTER_ADDR'] = 'localhost'
-            os.environ['MASTER_PORT'] = str(45601+args.port_offset)
+            os.environ['MASTER_PORT'] = str(args.master_port+args.port_offset)
             distributed.init_distributed_environment(world_size, rank, 'env://', rank, 'nccl')
             distributed.initialize_model_parallel(args.tp_size, backend='nccl')
             print("[Loading model]")
@@ -468,14 +479,16 @@ class DInferEvalHarness(LM):
                 print("EP Enabled:", vllm_config.parallel_config.enable_expert_parallel)
 
                 model_config = AutoConfig.from_pretrained(args.model_name, trust_remote_code=True)
-                if 'moe' in args.model_name:
+                if 'llada_moe' == args.model_type:
                     model = LLaDAMoeModelLM(config=model_config).eval()
                     model.load_weights(args.model_name, torch_dtype=torch.bfloat16)
-                elif 'mini' in args.model_name:
+                elif 'llada2' == args.model_type:
                     model = LLaDA2MoeModelLM(config=model_config).eval()
                     model.load_weights(args.model_name, torch_dtype=torch.bfloat16)
-                else:
+                elif 'llada' == args.model_type:
                     model = LLaDAModelLM.from_pretrained(args.model_name, torch_dtype=torch.bfloat16, init_device=device).eval()
+                else:
+                    raise ValueError('model type not supported')
 
                 if args.tp_size>1 and args.use_tp:
                     print('enabling tp')
@@ -529,7 +542,7 @@ class DInferEvalHarness(LM):
                     print("BlockDiffusionLLM")
                     dllm = BlockDiffusionLLM(model, decoder, BlockIteratorFactory(start_block_align=True), cache_factory=cache_factory, early_stop=True)
 
-                warmup_cudagraph(rank, device, dllm, args.gen_len, block_length, args.batch_size)
+                warmup_cudagraph(rank, device, dllm, args.gen_len, block_length, args.batch_size, args.vocab_size)
                         
                 for wi in range(1):
                     outputs = []
@@ -549,7 +562,6 @@ class DInferEvalHarness(LM):
                         max_length = 0
                         min_padded_length = 10000
                         for j, seq in enumerate(input_ids):
-                            # print(j, seq.shape)
                             if seq.shape[1] > max_length:
                                 max_length = seq.shape[1]
                                 min_padded_length = padded_gen_lens[i+j]
@@ -557,7 +569,6 @@ class DInferEvalHarness(LM):
                         for j in range(len(input_ids)):
                             batch_input_ids[j, :input_ids[j].shape[1]] = input_ids[j].to(device)
                         input_ids = batch_input_ids
-                        # print(input_ids.shape)
                         padded_gen_len = padded_gen_lens[i]
                         inner_start = time.time()
                         prev_forwards = dllm.num_forwards
@@ -631,34 +642,33 @@ class DInferEvalHarness(LM):
     
         if self.parallel == 'dp':
             with set_current_vllm_config(self.vllm_config):
-                if self.use_cudagraph and self.use_cudagraph:
-                    warmup_cudagraph(self.rank, self.device, self.dllm, self.gen_length, self.block_length, self.batch_size)
-                for i, req in enumerate(tqdm(requests, desc="Generating...")):
-                    input_ids = all_input_ids[i]
-                    padded_gen_len = padded_gen_lens[i]
-                    inner_start = time.time()
-                    input_ids = input_ids.to(self.device)
-                    prev_forwards = self.dllm.num_forwards
-                    out = self.dllm.generate(input_ids, gen_length=padded_gen_len,block_length=self.block_length)
-                    nfe = self.dllm.num_forwards - prev_forwards
-                    inner_stop = time.time()
-                    sample_time = inner_stop - inner_start
-                    outputs.append(out)
-                    answer = (self.tokenizer.decode(out[0, all_input_ids[i].shape[1]:], skip_special_tokens=True))
-                    answers.append(answer)
-                    total_forward += nfe
-                    token_number = out.shape[1] - input_ids.shape[1]
-                    token_numbers.append(token_number)
-                    tpf = token_number/nfe
-                    tps = token_number/sample_time
-                    fps = nfe/sample_time
-                    if self.rank == 0:
-                        print(f'iter={i}, fps={fps}, nfe={nfe}')
-                    tpfs.append(tpf)
-                    tpss.append(tps)
-                    fpss.append(fps)
-                    total_token += token_number
-
+                    if self.use_cudagraph and self.use_cudagraph:
+                        warmup_cudagraph(self.rank, self.device, self.dllm, self.gen_length, self.block_length, self.batch_size, self.vocab_size)
+                    for i, req in enumerate(tqdm(requests, desc="Generating...")):
+                        input_ids = all_input_ids[i]
+                        padded_gen_len = padded_gen_lens[i]
+                        inner_start = time.time()
+                        input_ids = input_ids.to(self.device)
+                        prev_forwards = self.dllm.num_forwards
+                        out = self.dllm.generate(input_ids, gen_length=padded_gen_len,block_length=self.block_length)
+                        nfe = self.dllm.num_forwards - prev_forwards
+                        inner_stop = time.time()
+                        sample_time = inner_stop - inner_start
+                        outputs.append(out)
+                        answer = (self.tokenizer.decode(out[0, all_input_ids[i].shape[1]:], skip_special_tokens=True))
+                        answers.append(answer)
+                        total_forward += nfe
+                        token_number = out.shape[1] - input_ids.shape[1]
+                        token_numbers.append(token_number)
+                        tpf = token_number/nfe
+                        tps = token_number/sample_time
+                        fps = nfe/sample_time
+                        if self.rank == 0:
+                            print(f'iter={i}, fps={fps}, nfe={nfe}')
+                        tpfs.append(tpf)
+                        tpss.append(tps)
+                        fpss.append(fps)
+                        total_token += token_number
             total_token = total_token
 
             stop = time.time()
@@ -677,9 +687,10 @@ class DInferEvalHarness(LM):
             procs = []
             answers = []
             gpus = [int(gpu) for gpu in self.gpus.split(';')]
-            args = {"gpu": self.gpus, "batch_size": self.batch_size, "model_name": self.model_path, "gen_len": self.gen_length, "block_length": self.block_length, "prefix_look": self.prefix_look, "after_look": self.after_look, "warmup_times": self.warmup_times, "low_threshold": self.low_threshold, "threshold": self.threshold, "cont_weight": self.cont_weight, "use_credit": self.use_credit, "cache": self.cache, "parallel_decoding": self.parallel_decoding, "tp_size": self.tp_size, "save_path": self.save_path, "use_cudagraph": self.use_cudagraph, "use_compile": self.use_compile,"use_bd": self.use_bd, "use_shift": self.use_shift}
+            args = {"gpu": gpus, "batch_size": self.batch_size, "model_name": self.model_path, "gen_len": self.gen_length, "block_length": self.block_length, "prefix_look": self.prefix_look, "after_look": self.after_look, "warmup_times": self.warmup_times, "low_threshold": self.low_threshold, "threshold": self.threshold, "cont_weight": self.cont_weight, "use_credit": self.use_credit, "cache": self.cache, "parallel_decoding": self.parallel_decoding, "tp_size": self.tp_size, "save_path": self.save_path, "use_cudagraph": self.use_cudagraph, "use_compile": self.use_compile,"use_bd": self.use_bd, "use_shift": self.use_shift, "model_type": self.model_type, "vocab_size": self.vocab_size}
             args = EvalConfig(**args)
             args.tp_size = len(gpus)
+            args.master_port = self.master_port
             args.use_tp = args.tp_size > 1
             args.port_offset = gpus[0]
             args.all_input_ids = all_input_ids

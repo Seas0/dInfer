@@ -74,10 +74,11 @@ def warmup_cudagraph(rank, device, dllm, args):
         iterator = tqdm.tqdm(used_buckets)
     else:
         iterator = used_buckets
+    vocab_size = 156896 if args.model_type in ['llada_moe', 'llada2'] else 126464
     for i in iterator:   
-        input_ids = torch.randint(0, 140000, (1, i - args.gen_len), dtype=torch.long, device=device)
+        input_ids = torch.randint(0, vocab_size, (batch_size, i - args.gen_len+offset), dtype=torch.long, device=device)
         dllm.generate(input_ids, gen_length=args.gen_len, block_length=args.block_length)
-
+    
 @ torch.no_grad()
 def main(world_size, rank, gpu_id, args):
     print('started', world_size, rank, gpu_id, args)

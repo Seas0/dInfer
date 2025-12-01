@@ -2,8 +2,7 @@ task: mbpp_sanitized_llada1.5
 dataset_path: json
 dataset_name: null
 dataset_kwargs:
-  # data_files: https://huggingface.co/datasets/Muennighoff/mbpp/resolve/main/data/sanitized-mbpp.json
-  data_files: /mnt/dllm/dulun.dl/dllm_decoding/sanitized-mbpp.json
+  data_files: https://huggingface.co/datasets/Muennighoff/mbpp/resolve/main/data/sanitized-mbpp.json
 process_docs: !function utils.process_docs
 test_split: train
 output_type: generate_until

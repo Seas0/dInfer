@@ -73,10 +73,11 @@ def warmup_cudagraph(rank, device, dllm, args):
     else:
         iterator = used_buckets
     offset = 0
+    vocab_size = 156896 if args.model_type in ['llada_moe', 'llada2'] else 126464
     for i in iterator:   
-        input_ids = torch.randint(0, 140000, (batch_size, i - args.gen_len+offset), dtype=torch.long, device=device)
+        input_ids = torch.randint(0, vocab_size, (batch_size, i - args.gen_len+offset), dtype=torch.long, device=device)
         dllm.generate(input_ids, gen_length=args.gen_len, block_length=args.block_length)
-
+        
 def cut_eos(data, eos_id):
     eos_indices = (data[0] == eos_id).nonzero(as_tuple=True)[0]
     if eos_indices.numel() > 0:
