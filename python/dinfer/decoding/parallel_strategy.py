@@ -4,6 +4,12 @@ import numpy as np
 import torch.nn.functional as F
 
 from .utils import add_gumbel_noise, get_num_transfer_tokens
+import torch.distributed as dist
+
+
+def broadcast_if_needed(x, src=0, group=None):
+    if dist.is_available() and dist.is_initialized() and dist.get_world_size(group) > 1:
+        dist.broadcast(x, src=src)
 
 
 @torch.no_grad()
@@ -416,6 +422,7 @@ class ThresholdParallelDecoder(ParallelDecoder):
         transfer_index = torch.logical_and(transfer_index, mask_index)
         assert transfer_index.dtype == torch.bool
         x[:, block_start:block_end] = torch.where(transfer_index, x0, curr_x)
+        broadcast_if_needed(x.data)
 
 
 class CreditThresholdParallelDecoder(ThresholdParallelDecoder):
@@ -503,6 +510,7 @@ class CreditThresholdParallelDecoder(ThresholdParallelDecoder):
         if not has_mask:
             self._credit_mats.clear()
             self._credit_iters.clear()
+        broadcast_if_needed(x.data)
 
 
 class FixedParallelDecoder(ParallelDecoder):
@@ -544,6 +552,7 @@ class FixedParallelDecoder(ParallelDecoder):
         )
         self.iter += 1
         x[:, block_start:block_end][transfer_index] = x0[transfer_index]
+        broadcast_if_needed(x.data)
 
 
 class HierarchyDecoder(ParallelDecoder):
@@ -656,3 +665,4 @@ class HierarchyDecoder(ParallelDecoder):
         self.iter += 1
         transfer_index = torch.logical_and(transfer_index, mask_index)
         x[:, block_start:block_end][transfer_index] = x0[transfer_index]
+        broadcast_if_needed(x.data)
