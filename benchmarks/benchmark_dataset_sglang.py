@@ -142,8 +142,7 @@ def main(world_size, rank, gpu_id, args):
     model.after_processing()    # if model is quantized, use quant_method.process_weights_after_loading
     input_lengths = [inp.size(-1) for inp in all_input_ids]
     max_length = max(input_lengths)+args.gen_len
-    aligned_lengths = np.unique([length//args.block_length*args.block_length for length in input_lengths])
-    aligned_lengths = [int(length) for length in aligned_lengths]
+    aligned_lengths = np.unique([max(args.block_length, min(length//args.block_length*args.block_length, args.prefilling_limit)) for length in input_lengths])
     model = ModelRunner(model, device, server_args=server_args, max_length=max_length, prefill_lengths=aligned_lengths, enable_cuda_graph=True, supported_batch_sizes=[args.batch_size])
 
 
@@ -175,7 +174,8 @@ def main(world_size, rank, gpu_id, args):
             else:
                 dllm = BlockWiseDiffusionLLM(model, decoder, BlockIteratorFactory(start_block_align=True), cache_factory=cache_factory, early_stop=True, use_shift=args.use_shift)
     else:
-        dllm = BlockDiffusionLLM(model, decoder, BlockIteratorFactory(start_block_align=True, use_block_diffusion=True), cache_factory=cache_factory, early_stop=True, maximum_unroll=1, expected_tpf=15, backend='sglang')
+        dllm = BlockDiffusionLLM(model, decoder, BlockIteratorFactory(start_block_align=True, use_block_diffusion=True), cache_factory=cache_factory, early_stop=True, 
+                                 maximum_unroll=1, expected_tpf=15, backend='sglang', prefilling_limit=args.prefilling_limit)
     # warmup for decoding algorithms
     input_ids = torch.arange(64, dtype=torch.long, device=device).unsqueeze(0)
     dllm.generate(input_ids, gen_length=args.gen_len, block_length=args.block_length)
@@ -316,6 +316,7 @@ if __name__ == '__main__':
     parser.add_argument('--use_bd', action='store_true')
     parser.add_argument('--model_type', type=str, default='mini')
     parser.add_argument('--ep_size', type=int, default=1)
+    parser.add_argument('--prefilling_limit', type=int, default=256)
     parser.add_argument('--use_quant' ,action='store_true')
     parser.add_argument('--config', type=int, default=0)
     args = parser.parse_args()
@@ -442,6 +443,46 @@ if __name__ == '__main__':
         args.threshold = 0.95
         args.warmup_times = 0
         args.use_bd=True
+    elif args.config == 43:
+        args.cache = 'prefix'
+        args.parallel_decoding = 'threshold'
+        args.prefix_look = 0
+        args.after_look = 0
+        args.threshold = 0.95
+        args.warmup_times = 0
+        args.use_bd=True
+        args.block_length=32
+        args.model_name = '/mnt/dllm/jlzhou/models/llada2-mini-dparallel/checkpoint-1484_fusemoe/'
+    elif args.config == 44:
+        args.cache = 'prefix'
+        args.parallel_decoding = 'threshold'
+        args.prefix_look = 0
+        args.after_look = 0
+        args.threshold = 0.9
+        args.warmup_times = 0
+        args.use_bd=True
+        args.block_length=32
+        args.model_name = '/mnt/rl/zongyun/model/veomni_dllm_flash_dp_fixmaskratio_2k_ep4_7116_nofuse/veomni_dllm_flash_dp_fixmaskratio_2k_ep4_7116_nofuse'
+    elif args.config == 45:
+        args.cache = 'prefix'
+        args.parallel_decoding = 'threshold'
+        args.prefix_look = 0
+        args.after_look = 0
+        args.threshold = 0.95
+        args.warmup_times = 0
+        args.use_bd=True
+        args.block_length=32
+        args.model_name = '/mnt/infra/dulun.dl/models/LLaDA2.0-MoE/1125-LLaDA2-mini'
+    elif args.config == 46:
+        args.cache = 'prefix'
+        args.parallel_decoding = 'threshold'
+        args.prefix_look = 0
+        args.after_look = 0
+        args.threshold = 0.95
+        args.warmup_times = 0
+        args.use_bd=True
+        args.block_length=32
+        args.model_name = '/mnt/nexus/hongyu/checkpoint/1125-release/LLaDA2.0-flash'
     procs = []
     print(args)
 

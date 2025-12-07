@@ -51,7 +51,7 @@ class SamplingParams:
     """
     def __init__(self, threshold=0.9, low_threshold=0.6, cache='dual', temperature=0., early_stop=True, cont_weight=0.3,
             prefix_look=16, after_look=16, warmup_steps=4, enable_torch_compile=True, mask_id=156895, eos_id=156892, 
-            parallel_decoding='threshold', use_credit=False, use_bd=True, max_length=4096, ep_size=1):
+            parallel_decoding='threshold', use_credit=False, use_bd=True, max_length=4096, ep_size=1, prefilling_limit=256):
         self.threshold = threshold
         self.low_threshold = low_threshold
         self.cache = cache
@@ -69,6 +69,7 @@ class SamplingParams:
         self.use_bd = use_bd
         self.max_length = max_length
         self.ep_size = ep_size
+        self.prefilling_limit = prefilling_limit
 
 def init_generator(model, sample_params, backend='vllm', max_length=4096):
     if sample_params.parallel_decoding == 'threshold':
@@ -106,7 +107,8 @@ def init_generator(model, sample_params, backend='vllm', max_length=4096):
                     early_stop=sample_params.early_stop)
     else:
         dllm = BlockDiffusionLLM(model, decoder, BlockIteratorFactory(start_block_align=True, use_block_diffusion=True), 
-            cache_factory=cache_factory, early_stop=sample_params.early_stop, maximum_unroll=2, expected_tpf=15, backend=backend)
+            cache_factory=cache_factory, early_stop=sample_params.early_stop, maximum_unroll=2, expected_tpf=15, backend=backend, 
+            prefilling_limit=sample_params.prefilling_limit)
 
     return dllm
 

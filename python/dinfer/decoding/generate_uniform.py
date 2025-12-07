@@ -136,13 +136,13 @@ class BlockDiffusionRunner(BlockRunner):
         self.hidden_cache_update_count = 0
         self.need_cross_block_update = False
 
-    def prefill(self, model, block, kv_cache, pos_ids, attn_mask):
+    def prefill(self, model, prefilling_x, kv_cache, pos_ids, attn_mask, prefilling_limit, block_length):
         """ Prefill for KV Cache
         Parameters
         ----------
         model : pytorch model
             The diffusion LLM
-        block : torch.Tensor
+        prefilling_x : torch.Tensor
             The input IDs of the tokens in the prefilling range.
         kv_cache: KVCache
             The KV-cache
@@ -150,15 +150,41 @@ class BlockDiffusionRunner(BlockRunner):
             The position IDs of the tokens in the prefilling range.
         attn_mask: torch.Tensor
             The attention mask of the tokens in the prefilling range.
+        prefilling_limit: int
+            The limit of the first prefilling step.
+        block_length: int
+            The block length, used for the following prefilling steps if needed.
         """
         if kv_cache is None:
             return
         else:
-            output = model(block.clone(memory_format=torch.contiguous_format), use_cache=True, attention_mask=attn_mask, position_ids=pos_ids.clone(memory_format=torch.contiguous_format))
-            if self.backend == 'vllm':
-                kv_cache.update(output.past_key_values)
+            if prefilling_limit > prefilling_x.shape[1]:
+                output = model(prefilling_x.clone(memory_format=torch.contiguous_format), use_cache=True, attention_mask=attn_mask, position_ids=pos_ids.clone(memory_format=torch.contiguous_format))
+                if self.backend == 'vllm':
+                    kv_cache.update(output.past_key_values)
+                else:
+                    kv_cache.range_update(output.past_key_values, 0, prefilling_x.size(1), 0)
             else:
-                kv_cache.range_update(output.past_key_values, 0, block.size(1), 0)
+                # limit prefilling length to avoid OOM
+                # first prefill partial prompt
+                output = model(prefilling_x[:, :prefilling_limit].clone(memory_format=torch.contiguous_format), use_cache=True, attention_mask=attn_mask[:, :prefilling_limit, :prefilling_limit], 
+                               position_ids=pos_ids[:, :prefilling_limit].clone(memory_format=torch.contiguous_format))
+                if self.backend == 'vllm':
+                    kv_cache.update(output.past_key_values)
+                else:
+                    kv_cache.range_update(output.past_key_values, 0, prefilling_limit, 0)
+                # continue prefilling other parts, using block length to be able to replay already captured cuda graph
+                for block_start in range(prefilling_limit, prefilling_x.shape[1], block_length):
+                    block_end = block_start+block_length
+                    kv_cache.extend_cache(block_end)
+                    past_key_values, replace_position = kv_cache.get_key_values(block_start, block_end)
+                    output = model(prefilling_x[:, block_start:block_end].clone(memory_format=torch.contiguous_format), use_cache=True, past_key_values=past_key_values,
+                                position_ids=pos_ids[:, block_start:block_end].clone(memory_format=torch.contiguous_format))     
+                    if self.backend == 'vllm':
+                        kv_cache.update(output.past_key_values)
+                    else:
+                        kv_cache.range_update(output.past_key_values, 0, block_end, block_length)     
+
             self.diff_iteration.num_forwards +=1
             self.diff_iteration.iter_no +=1
         self.need_cross_block_update = False
@@ -943,7 +969,7 @@ class BlockDiffusionLLM(DiffusionLLM):
         The factory class that generates the iterator on the input token array.
 
     """
-    def __init__(self, model, decoder, iterator_factory, cache_factory, early_stop=True, maximum_unroll=4, expected_tpf=8, backend='vllm'):
+    def __init__(self, model, decoder, iterator_factory, cache_factory, early_stop=True, maximum_unroll=4, expected_tpf=8, backend='vllm', prefilling_limit=256):
         self.model = model
         self.decoder = decoder
         self.iterator_factory = iterator_factory
@@ -952,6 +978,7 @@ class BlockDiffusionLLM(DiffusionLLM):
         self.block_runner = BlockDiffusionRunner(self.diff_iteration, early_stop, maximum_unroll, expected_tpf, backend)
         self.early_stop = early_stop
         self.backend = backend
+        self.prefilling_limit = prefilling_limit
 
     @property
     def num_forwards(self):
@@ -992,8 +1019,8 @@ class BlockDiffusionLLM(DiffusionLLM):
         prefill_blocks = prompt_length // block_length
         prefill_length = prefill_blocks * block_length
         prefill_length = max(prefill_length, block_length)
-        self.block_runner.prefill(self.model, x[:, :prefill_length], kv_cache, pos_ids[:, :prefill_length], bd_attn_mask[:,:prefill_length,:prefill_length])
-
+        self.block_runner.prefill(self.model, x[:, :prefill_length], kv_cache, pos_ids[:, :prefill_length], bd_attn_mask[:,:prefill_length,:prefill_length], self.prefilling_limit, block_length)
+        
         # We need to reset iter_no at the beginning of generating a sequence.
         self.diff_iteration.iter_no = 0
         for block_id, (block_loc, block) in enumerate(it):

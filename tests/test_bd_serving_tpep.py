@@ -62,7 +62,7 @@ def test_bd_tpep():
       input_ids = tokenizer(prompt)['input_ids']
       input_ids = torch.tensor(input_ids)
 
-      out1 = dllm_server1.generate(input_ids, gen_length=256, block_length=32)
+      out1 = dllm_server1.generate(input_ids, gen_length=128, block_length=32)
       new_ans1 = tokenizer.decode(out1[0, input_ids.shape[1]:], skip_special_tokens=True)
       
       ans1.append(out1[0, input_ids.shape[1]:])
@@ -81,14 +81,35 @@ def test_bd_tpep():
       input_ids = tokenizer(prompt)['input_ids']
       input_ids = torch.tensor(input_ids)
 
-      out2 = dllm_server2.generate(input_ids, gen_length=256, block_length=32)
+      out2 = dllm_server2.generate(input_ids, gen_length=128, block_length=32)
       new_ans2 = tokenizer.decode(out2[0, input_ids.shape[1]:], skip_special_tokens=True)
       ans2.append(out2[0, input_ids.shape[1]:])
+    dllm_server2.stop_serving()
+  
+
+    sample_params3 = SamplingParams(threshold=0.9, cache='prefix', temperature=0., early_stop=True, cont_weight=0, prefix_look=0, 
+            after_look=0, warmup_steps=0, enable_torch_compile=True, mask_id=156895, eos_id=156892, parallel_decoding='threshold', 
+            use_credit=False, use_bd=True, max_length=2048, ep_size=4, prefilling_limit=32)
+    dllm_server3 = DiffusionLLMServing(model_path, model_type='llada2-mini', sample_params=sample_params3, server_port=40680, num_gpus=4, dp_size=1, tpep_size=4, backend='sglang')
+    ans3 = []
+    for sample in samples:
+      prompt = [sample['question']]
+      prompt[0] = '<role>SYSTEM</role>detailed thinking off<|role_end|><role>HUMAN</role>'+prompt[0]+'<|role_end|><role>ASSISTANT</role>' 
+      
+      input_ids = tokenizer(prompt)['input_ids']
+      input_ids = torch.tensor(input_ids)
+
+      out3 = dllm_server3.generate(input_ids, gen_length=128, block_length=32)
+      new_ans3 = tokenizer.decode(out3[0, input_ids.shape[1]:], skip_special_tokens=True)
+      ans3.append(out3[0, input_ids.shape[1]:])
     dllm_server2.stop_serving()
 
     for i in range(len(ans1)):
       matching_portion = (ans1[i] == ans2[i]).float().mean()
-      print(f"matching_portion: {matching_portion}")
+      print(f"matching_portion 1<->2: {matching_portion}")
+      assert matching_portion > 0.9
+      matching_portion = (ans2[i] == ans3[i]).float().mean()
+      print(f"matching_portion 2<->3: {matching_portion}")
       assert matching_portion > 0.9
       # assert(ans1[i] == ans2[i])
     
