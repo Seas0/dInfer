@@ -90,6 +90,7 @@ config = AutoConfig.from_pretrained(model_path, trust_remote_code=True, local_fi
 config.flash_attention = True
 config.train_max_sequence_length = 4096
 model = LLaDAModelLM.from_pretrained(model_path, torch_dtype=torch.bfloat16, config=config).eval()
+model.init_h2e_module()
 model = model.to(device)
 fastdllm_model = LLaDAModelLM_fastdllm.from_pretrained(model_path, torch_dtype=torch.bfloat16, config=config).eval()
 fastdllm_model = fastdllm_model.to(device)
@@ -129,10 +130,16 @@ def test_dual_cache():
   assert res.shape[1] == len(res1)
   res1 = res1.to(res.device)
   assert torch.all(res == res1)
-    
+
+def test_itersmooth():
+  print('Test block-wise diffusion LLM with dual KV-cache')
+  dllm = IterSmoothDiffusionLLM(model, decoder, BlockIteratorFactory(), cache_factory=KVCacheFactory('dual'), early_stop=True)
+  res = dllm.generate(input_ids, gen_length=128, block_length=32)
 
 if __name__ == '__main__':
-    print("Start test sliding window with dual cach...")
+    print("Start test iter smooth...")
+    test_itersmooth()    
+    print("Start test sliding window with dual cache...")
     test_sw_dual_cache()
     print("Start test prefix cache...")
     test_prefix_cache()

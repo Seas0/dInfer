@@ -125,6 +125,7 @@ def main(world_size, rank, gpu_id, args):
             eos_id = 156892
         elif args.model_type=='llada':
             model = LLaDAModelLM.from_pretrained(args.model_name, torch_dtype=torch.bfloat16, init_device=str(device)).eval()
+            model.init_h2e_module()
             mask_id = 126336
             eos_id = 126081
         else:

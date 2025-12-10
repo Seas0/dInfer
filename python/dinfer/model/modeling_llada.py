@@ -99,6 +99,146 @@ __all__ = [
     "LLaDAGenerateOutput",
 ]
 
+
+def _all_gather_cat(
+    tensor: torch.Tensor,
+    dim: int = 1,
+    group: Optional[dist.ProcessGroup] = None,
+    normal_len: int = 0,
+    last_len: int = 0,
+) -> torch.Tensor:
+    """
+    Gather tensors along `dim` from all ranks and concatenate them.
+    Only the last chunk may be shorter than `normal_len`; all others are exactly `normal_len`.
+
+    Args:
+        tensor: local tensor on current rank
+        dim: dimension along which to concatenate
+        normal_len: length of the first (world_size-1) ranks along `dim`
+        last_len: length of the last rank along `dim`
+
+    Returns:
+        Concatenated tensor of shape [total_len, ...] along `dim`
+    """
+    world_size = dist.get_world_size(group)
+    rank = dist.get_rank(group)
+    if world_size == 1:
+        return tensor
+
+    # 1. Move the concatenation dimension to 0 for easier all_gather
+    tensor = tensor.movedim(dim, 0)          # [L_local, ...]
+    L_local = tensor.size(0)
+
+    # 2. Compute global length across all ranks
+    total_len = normal_len * (world_size - 1) + last_len
+
+    # 3. Pre-allocate receive buffers (same shape for all ranks, sized for the largest chunk)
+    max_len = max(normal_len, last_len)
+    gather_list = [
+        torch.empty([max_len] + list(tensor.shape[1:]),
+                   dtype=tensor.dtype,
+                   device=tensor.device)
+        for _ in range(world_size)
+    ]
+
+    # 4. Copy local data into the corresponding buffer (only first L_local rows are valid)
+    gather_list[rank][:L_local] = tensor
+
+    # 5. All-gather (communicate only valid parts)
+    dist.all_gather(gather_list, gather_list[rank], group=group)
+
+    # 6. Trim padding and concatenate
+    gathered = torch.cat(gather_list, dim=0)[:total_len]
+
+    # 7. Move dimension back to original position
+    return gathered.movedim(0, dim)
+
+
+class H2Embed:
+    def __init__(self, embedding: nn.Embedding, tau: float = 1.0):
+        """
+        W_e : token embedding weights [V, d]
+        tau : temperature; lower values yield sharper distributions
+        """
+        self.embedding = embedding
+        self.W_e = embedding.weight
+        self.tau = tau
+        self.sp_size = 1  # no sequence parallel by default
+
+    def __call__(
+        self,
+        x: torch.Tensor,
+        mask_index: Optional[torch.Tensor] = None,
+        logits: Optional[torch.Tensor] = None,
+        iter_cont_weight: float = 0.0
+    ) -> torch.Tensor:
+        """
+        Args:
+            x: [B, L] token ids
+            mask_index: [B, L] bool tensor, True where continuous embedding should be used
+            logits: [B, L, V] logits used to produce continuous embeddings
+            iter_cont_weight: blending weight between continuous and discrete embeddings
+
+        Returns:
+            Embedded representations [B, L, d]
+        """
+        if torch.distributed.is_initialized():
+            rank = get_tensor_model_parallel_rank()
+            world_size = get_tensor_model_parallel_world_size()
+        else:
+            rank = 0
+            world_size = 1
+        seq_len = x.shape[1]
+
+        # If sequence parallel is enabled, each rank handles a slice of the sequence
+        if self.sp_size > 1:
+            normal_seq_len = (seq_len + self.sp_size - 1) // self.sp_size
+            last_seq_len = seq_len - normal_seq_len * (self.sp_size - 1)
+
+            part_start = normal_seq_len * rank
+            part_end = min(normal_seq_len * (rank + 1), seq_len)
+            x_part = x[:, part_start:part_end]
+
+            if mask_index is not None:
+                mask_part = mask_index[:, part_start:part_end]
+                logits_part = logits[:, part_start:part_end] if logits is not None else None
+            else:
+                mask_part = None
+                logits_part = None
+        else:
+            x_part = x
+            mask_part = mask_index
+            logits_part = logits
+
+        # Base discrete embedding
+        result_part = self.embedding(x_part)
+
+        # Replace selected positions with continuous embeddings
+        if mask_part is not None and logits_part is not None:
+            prob = torch.softmax(logits_part / self.tau, dim=-1)  # [B, L_part, V]
+            input_embeds_h = prob @ self.W_e  # [B, L_part, d]
+
+            # Blend continuous and discrete embeddings
+            result_part = torch.where(
+                mask_part.unsqueeze(-1),
+                iter_cont_weight * input_embeds_h + 1 * result_part,
+                result_part
+            )
+
+        # 4. Gather and concatenate sequence slices across ranks
+        if self.sp_size > 1:
+            out = _all_gather_cat(
+                result_part,
+                dim=1,
+                group=None,
+                normal_len=normal_seq_len,
+                last_len=last_seq_len
+            )
+        else:
+            out = result_part
+
+        return out
+
 def replace_linear_class(
     linear: nn.Linear, style: Literal["colwise", "rowwise"],
     rank:int=0, world_size:int=1
@@ -1482,7 +1622,6 @@ class LLaDAModel(nn.Module):
         # Get embeddings of input.
         # shape: (batch_size, seq_len, d_model)
         x = self.transformer.wte(input_ids) if input_embeddings is None else input_embeddings  # type: ignore
-
         if self.config.input_emb_norm:
             x = x * (self.config.d_model**0.5)
 
@@ -1767,7 +1906,9 @@ class LLaDAModelLM(PreTrainedModel):
     def tie_weights(self):
         if self.config.weight_tying:
             self.model.transformer.ff_out = self.model.transformer.wte
-            
+
+    def init_h2e_module(self):
+        self.h2e = H2Embed(self.model.transformer.wte, tau=1.0)            
 
     def tensor_parallel(self, tp_size):
         """
@@ -1791,9 +1932,10 @@ class LLaDAModelLM(PreTrainedModel):
                     _tensor_parallel(child_module, prefix=qual_name)
                 if '.blocks.' in qual_name and len(qual_name.split('.'))==3:
                     child_module.tp_size = tp_size
-
                     
         _tensor_parallel(self.model)
+        self.init_h2e_module()
+        self.h2e.sp_size = tp_size
 
 # Register the model so that it is available for transformer pipelines, auto-loading, etc.
 AutoModel.register(LLaDAConfig, LLaDAModelLM)
