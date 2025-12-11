@@ -294,7 +294,7 @@ def main(world_size, rank, gpu_id, args):
                     json.dump({'id':id, 'question':question, 'prompt':prompt, 'answer': answer, 'generated_length': token_numbers[i], 'tpf':tpfs[i//batch_size], 'tps':tpss[i//batch_size], 'fps':fpss[i//batch_size], }, f, indent=4)
                     f.write('\n')
             with open('results.txt', 'a+') as f:
-                print(args.exp_name, args.config, args.parallel_decoding, args.threshold, args.prefix_look, args.batch_size, args.block_length, args.gpu, total_forward, stop-start, total_time, total_token / len(all_input_ids), total_forward/total_time, total_token/total_time, total_token/total_forward, sum(padded_gen_lens)/total_forward, np.mean(fpss), np.mean(tpss), np.mean(tpfs), args.dataset, file=f)
+                print(args.exp_name, args.config, args.parallel_decoding, args.threshold, args.prefix_look, args.batch_size, args.block_length, args.gpu, total_forward, stop-start, total_token / len(all_input_ids), total_forward/total_time, total_token/total_time, total_token/total_forward, sum(padded_gen_lens)/total_forward, np.mean(fpss), np.mean(tpss), np.mean(tpfs), args.dataset, file=f)
 
 def process_args(args):
     import warnings
