@@ -11,6 +11,12 @@ from transformers import AutoConfig
 _original_from_pretrained = AutoConfig.from_pretrained
 from vllm.config import ParallelConfig
 from vllm.config import VllmConfig, set_current_vllm_config, get_current_vllm_config
+import socket
+from typing import Any, Optional, List, Optional, Tuple
+import random
+import time
+from contextlib import closing
+
 
 from .parallel_strategy import ThresholdParallelDecoder, CreditThresholdParallelDecoder, HierarchyDecoder
 from .utils import KVCacheFactory, BlockIteratorFactory
@@ -23,6 +29,96 @@ import sys
 from transformers.configuration_utils import PretrainedConfig
 
 logger = logging.getLogger(__name__)
+
+def is_port_available(port: int) -> bool:
+        """
+        Check if a single port is available.
+
+        :param port: The port number to check.
+        :return: Whether the port is available.
+        """
+        sock_type = socket.SOCK_STREAM
+        try:
+            with closing(socket.socket(socket.AF_INET, sock_type)) as s:
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                s.bind(('0.0.0.0', port))
+                return True
+        except OSError:
+            return False
+
+def find_continuous_ports(
+        num_ports: int,
+        start_port: int = 30000,
+        end_port: int = 65535,
+        protocol: str = 'tcp',
+        max_attempts: int = 300,
+        retry_delay: float = 0.1
+    ) -> Optional[Tuple[int, List[int]]]:
+    """
+    Find a sequence of consecutive free ports within a specified range.
+
+    :param num_ports: Number of consecutive ports required.
+    :param start_port: Starting port number (default: 1024).
+    :param end_port: Ending port number (default: 65535).
+    :param protocol: Protocol type ('tcp' only).
+    :param max_attempts: Maximum number of retry attempts.
+    :param retry_delay: Delay between retries (in seconds).
+    :return: A tuple of (start_port, list_of_ports) if found, otherwise raise ValueError.
+    """
+    # Validate input parameters
+    if num_ports <= 0:
+        raise ValueError("Number of ports must be greater than 0")
+    if start_port < 0 or end_port > 65535:
+        raise ValueError("Port range must be between 0 and 65535")
+    if start_port > end_port:
+        raise ValueError("Start port cannot be greater than end port")
+    if (end_port - start_port + 1) < num_ports:
+        raise ValueError(f"Port range ({start_port}-{end_port}) is too small to accommodate {num_ports} consecutive ports")
+
+    # calculate the max start port
+    max_start = end_port - num_ports + 1
+
+    for attempt in range(max_attempts):
+        # Seeding with a combination of process ID and high-resolution timestamp
+        pid = os.getpid()
+        seed = pid + int(time.time() * 1_000_000)
+        random.seed(seed)
+
+        current = random.randint(start_port, max_start-1)
+        while current <= max_start:
+            # check current port
+            if not is_port_available(current):
+                current += 1
+                continue
+
+            # check following n+1 port
+            all_available = True
+            for offset in range(1, num_ports):
+                port_to_check = current + offset
+                if not is_port_available(port_to_check):
+                    all_available = False
+                    current = port_to_check + 1  
+                    break
+
+            # find available port and then lock these port
+            if all_available:
+                # check port again
+                final_check = True
+                for port in range(current, current + num_ports):
+                    if not is_port_available(port):
+                        final_check = False
+                        current = port + 1
+                        break
+
+                if final_check:
+                    ports = list(range(current, current + num_ports))
+                    return current, ports
+
+        # No port found in this attempt; sleep and retry.
+        time.sleep(retry_delay)
+    
+    # No port found in all attempts; raise valueerror
+    raise ValueError(f"No available ports found after {max_attempts} attempts. Range: {start_port}-{end_port}, Number of ports: {num_ports}")
 
 def load_local_config(model_dir):
     # load config.json from model_path
@@ -210,8 +306,8 @@ def _sglang_llada2_server_process(model_path, sample_params, world_size, rank, g
     model_config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
 
     # ServerArgs call autoconfig in sglang/srt/utils/hf_transformers_utils.py. We use overrided autoconbfig here.
-    server_args = ServerArgs(model_path=model_path, enable_dp_attention=True, trust_remote_code=True, tp_size=world_size, dp_size = 1, pp_size = 1) 
-
+    server_args = ServerArgs(model_path=model_path, enable_dp_attention=True, trust_remote_code=True, tp_size=world_size, dp_size = 1, pp_size = 1,
+                            port=master_port+1, dist_init_addr="127.0.0.1:{}".format(master_port+2))
 
     try:
         from sglang.srt.server_args import set_global_server_args_for_scheduler
@@ -416,10 +512,9 @@ class ServerHandle:
         assert num_gpus >= dp_size * tpep_size
         for i in range(dp_size):
             self.groups.append(ServerGroup())
-            server_port += 1
             gpus = [gpu + i for i in range(tpep_size)]
-            logger.info(f'start server group on GPU {gpus}, server port: {server_port}')
-            self.groups[-1].start_server(model_path, model_type, sample_params, server_port, gpus, backend=backend)
+            logger.info(f'start server group on GPU {gpus}, server port: {server_port[i]}')
+            self.groups[-1].start_server(model_path, model_type, sample_params, server_port[i], gpus, backend=backend)
             gpu = gpus[-1] + 1
             
 
@@ -448,12 +543,20 @@ class DiffusionLLMServing:
         Whether this is a MOE model. This leads to using different model code and inference code.
     sample_params : SamplingParams
         The parameters used in sampling.
-    server_port : int
+    server_port: int
         The port for communication between the background process.
     num_gpus : int
         The number of GPUs used for parallel computation.
+    max_retries : int
+        The maximum number of retry attempts per DP group when searching for free ports.
+    start_port : int
+        The starting port number (inclusive) for the port search range.
+    end_port : int
+        The ending port number (inclusive) for the port search range.
     """
-    def __init__(self, model, model_type='llada2', sample_params=None, server_port=12345, num_gpus=None, dp_size=None, tpep_size=None, backend='sglang', timeout = None):
+    def __init__(self, model, model_type='llada2', sample_params=None, server_port=None, num_gpus=None, dp_size=None, tpep_size=None, backend='sglang', timeout = None,
+                max_retries=3, start_port=30000, end_port=60000
+                ):
         if sample_params is None:
             sample_params = SamplingParams()
         self.sample_params = sample_params
@@ -464,6 +567,14 @@ class DiffusionLLMServing:
         if tpep_size is None:
             tpep_size = num_gpus // dp_size
         assert dp_size * tpep_size <= num_gpus
+        if server_port == None:
+            # find a free port for each group
+            server_port = self.port_selection(dp_size, start_port, end_port, max_retries=max_retries)
+        else:
+            # Keep compatibility with the existing implementation: assign ports starting from the current port + 1.
+            server_port = [server_port+i for i in range(dp_size)]
+        logger.info(f"find server port:{server_port}")
+
         if not handle.is_running():
             handle.start_server(model, model_type, sample_params, server_port, num_gpus, dp_size, tpep_size, backend)
         self.num_forwards = 0
@@ -506,3 +617,28 @@ class DiffusionLLMServing:
         """ Stop model serving.
         """
         handle.stop_running()
+        return None
+
+    def port_selection(self, dp_size, start_port, end_port, max_retries=3):
+        # select continuous port for each dp group ranging from start_port to end_port
+        ports=[] 
+        for dp in range(dp_size):
+            for retry in range(max_retries):
+                try:
+                    # start with 7 ports: 1 nccl port; 6 continus port for server_args: 1 server_args default port + 5 extra ports if dp_attention is available
+                    # for simplity, we select 7 continuous_ports for each group
+                    port, dp_ports_list = find_continuous_ports(num_ports=7, start_port=start_port, end_port=end_port) 
+                    ports.append(port) # record the first port for this group
+                    logger.info("Allocated port range [%d-%d] (%d ports) for DP group %d", dp_ports_list[0], dp_ports_list[-1], len(dp_ports_list), dp)
+                    break
+                except ValueError as e:
+                    if retry < max_retries - 1:
+                        logger.warning("DP rank %d, attempt %d failed: %s. Retrying...",dp, retry + 1, e)
+                        time.sleep(1)
+                    else:
+                        raise RuntimeError(
+                            f"Failed to allocate ports for DP rank {dp} after {max_retries} attempts"
+                        ) from e
+        return ports
+    
+
