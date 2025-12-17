@@ -2,4 +2,4 @@ from .parallel_strategy import ThresholdParallelDecoder,CreditThresholdParallelD
 
 from .generate_uniform import BlockWiseDiffusionLLM, VicinityCacheDiffusionLLM, IterSmoothWithVicinityCacheDiffusionLLM, BlockWiseDiffusionLLMWithSP, IterSmoothDiffusionLLM, BlockDiffusionLLMAttnmask, BlockDiffusionLLM
 
-from .utils import BlockIteratorFactory, KVCacheFactory
+from .utils import BlockIteratorFactory, KVCacheFactory, TokenArray

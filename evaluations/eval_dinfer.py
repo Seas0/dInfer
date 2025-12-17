@@ -38,8 +38,8 @@ os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 
 @dataclass
 class EvalConfig:
-    model_name: str = '/mnt/dllm/fengling/moe/workdir/7bA1b_anneal_19t_500B_further_8k_anneal_train_4k_ep3_v8p5/step45567_converted_hf_fusemoe'
-    gpu: str = '0,1,2,3'
+    model_name: str = ''
+    gpu: str = '0;1;2;3'
     batch_size: int = 1
     gen_len: int = 1024
     prefix_look: int = 0
@@ -103,7 +103,7 @@ class DInferEvalHarness(LM):
         use_compile = True,
         master_port = 23456,
         use_cudagraph = True,
-        gpus = '0,1,2,3',
+        gpus = '0;1;2;3',
         use_bd = False,
         prefix_look = 0,
         after_look = 0,
