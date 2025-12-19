@@ -221,17 +221,10 @@ def run_benchmark(world_size, rank, gpu_id, tokenizer, args):
                     f.write('\n')
             print(f'Forward: {total_forward}, Time: {stop-start}, FPS: {total_forward/(stop-start)}({np.mean(fpss)}), TPS: {total_token/(stop-start)}({np.mean(tpss)}), TPF: {total_token/total_forward}({np.mean(tpfs)})')
 
-            if args.save_dir is not None:
-                with open (args.save_dir+f'/results.jsonl', 'w', encoding='utf-8') as file:
-                    data={'rank':f'rank{rank}',
-                        'forward per second': f"{total_forward/(stop-start)}({np.mean(fpss)})",
-                        'tokens per second': f"{total_token/(stop-start)}({np.mean(tpss)})",
-                        'tokens per forward':  f"{total_token/total_forward}({np.mean(tpfs)})",
-                        'average generated length': total_token / len(all_input_ids)
-                        }
-                    file.write(json.dumps(data, ensure_ascii=False) + '\n')
+            with open(args.speed_path, 'a+') as f:
+                print( args.config, args.parallel_decoding, args.threshold, args.prefix_look, args.batch_size, args.block_length, total_forward, stop-start, total_token / len(all_input_ids), total_forward/(stop-start), total_token/(stop-start), total_token/total_forward, sum(padded_gen_lens)/total_forward, np.mean(fpss), np.mean(tpss), np.mean(tpfs), file=f)
         return 
-        
+
 
 @dataclass
 class EvalConfig:
@@ -267,6 +260,7 @@ class EvalConfig:
     eos_id: int = 156892
     save_dir: str = './res'
     save_samples: bool = False
+    speed_path: str = ''
 
 
 def set_seed(seed):
@@ -611,6 +605,7 @@ class DInferEvalHarness(LM):
             os.makedirs(self.save_dir, exist_ok=True)
             self.save_path = os.path.join(self.save_dir, f'rank_{self.rank}.jsonl')
             print(f"save_path: {self.save_path}")
+            self.speed_path = os.path.join(self.save_dir, f'results.txt')
         
 
         def get_bucket_length(length):
@@ -700,7 +695,7 @@ class DInferEvalHarness(LM):
             procs = []
             answers = []
             gpus = [int(gpu) for gpu in self.gpus.split(';')]
-            args = {"gpu": gpus, "batch_size": self.batch_size, "model_name": self.model_path, "gen_len": self.gen_length, "block_length": self.block_length, "prefix_look": self.prefix_look, "after_look": self.after_look, "warmup_times": self.warmup_times, "low_threshold": self.low_threshold, "threshold": self.threshold, "cont_weight": self.cont_weight, "use_credit": self.use_credit, "cache": self.cache, "parallel_decoding": self.parallel_decoding, "tp_size": self.tp_size, "save_path": self.save_path, "use_cudagraph": self.use_cudagraph, "use_compile": self.use_compile,"use_bd": self.use_bd, "use_shift": self.use_shift, "model_type": self.model_type, "vocab_size": self.vocab_size, "mask_id": self.mask_id, "eos_id": self.eos_id, "save_dir": self.save_dir, "save_samples": self.save_samples}
+            args = {"gpu": gpus, "batch_size": self.batch_size, "model_name": self.model_path, "gen_len": self.gen_length, "block_length": self.block_length, "prefix_look": self.prefix_look, "after_look": self.after_look, "warmup_times": self.warmup_times, "low_threshold": self.low_threshold, "threshold": self.threshold, "cont_weight": self.cont_weight, "use_credit": self.use_credit, "cache": self.cache, "parallel_decoding": self.parallel_decoding, "tp_size": self.tp_size, "save_path": self.save_path, "use_cudagraph": self.use_cudagraph, "use_compile": self.use_compile,"use_bd": self.use_bd, "use_shift": self.use_shift, "model_type": self.model_type, "vocab_size": self.vocab_size, "mask_id": self.mask_id, "eos_id": self.eos_id, "save_dir": self.save_dir, "save_samples": self.save_samples, "speed_path": self.speed_path}
             args = EvalConfig(**args)
             args.tp_size = len(gpus)
             args.master_port = self.master_port
@@ -732,4 +727,3 @@ if __name__ == "__main__":
     mp.set_start_method("spawn", force=True)
     set_seed(1234)
     cli_evaluate()
-    
