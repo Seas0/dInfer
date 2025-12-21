@@ -23,20 +23,11 @@ flexible algorithms combinations in each component. It now supports batched infe
   <b>Figure</b>: Overall Architecture of dInfer
 </p>
 
-dInfer supports multiple dLLM variants, including LLaDA and LLaDA-MoE.
-
-**Algorithmic improvements:**
-- Soft diffusion iteration for smoother denoising
-- Hierarchical and credit decoding for enhanced parallel decoding
-- Vicinity refresh strategy for KV-cache management to mitigate cache staleness
-
-**System-level optimizations:**
-- Tensor Parallelism (TP) and Expert Parallelism (EP) to maximize GPU utilization across batch sizes
-- Dynamic batching support for improved throughput on multi-request workloads
-- PyTorch compilation and NVIDIA CUDA Graphs for efficient kernel execution
-- Loop unrolling mechanism to eliminate CUDA stream bubbles across diffusion iterations
+dInfer supports multiple dLLM variants, including LLaDA, LLaDA-MoE and LLaDA2.
 
 ## News
+**\[2025/12/21\]** release v0.2. The major features of this release can be found [here](https://github.com/inclusionAI/dInfer/releases/tag/v0.2.0).
+
 **\[2025/12/10\]** Support and speed up the formal version of block diffusion LLMs (LLaDA2-mini and LLaDA2-flash). Support quant versions of LLaDA2-mini and LLaDA2-flash.
 
 **\[2025/11/15\]** Support the inference on block diffusion LLMs (LLaDA2-mini-preview and LLaDA2-flash-preview).
@@ -74,6 +65,17 @@ cd dInfer
 pip install .
 ```
 
+To use it with vLLM backend (it works with LLaDA and LLaDA-MoE), please install vLLM.
+
+```
+pip install vllm==0.10.2
+```
+
+To use it with SGLang backend (it works with LLaDA2), please install SGLang.
+```
+pip install sglang==0.5.3.post1
+```
+
 ### Convert to FusedMoE (MoE models only)
 
 #### 1) Download and Convert
@@ -105,44 +107,71 @@ model = AutoModelForCausalLM.from_pretrained(m, trust_remote_code=True, torch_dt
 
 ### Run Inference
 
-- **Benchmark (speed only)**
-  - Measure throughput (TPS) only; predictions are saved under `--output_dir` with no automatic scoring.
-  - Example 1 Dataset profiling (LLaDA-MoE, threshold decoder, TP across 4 GPUs):
+#### Benchmark (speed only)
+
+Measure throughput (TPS) only; predictions are saved under `--output_dir` with no automatic scoring. 
+
+- **LLaDA2 model** 
+
+  - LLaDA2-flash Dataset profiling (threshold decoder, TP across 4 GPUs):
+
+  ```bash
+  python benchmarks/benchmark_dataset_sglang.py \
+        --model_name inclusionAI/LLaDA2.0-flash \
+        --dataset dataset_path \
+        --gen_len 2048 \
+        --block_length 32 \
+        --gpu 0,1,2,3 \
+        --output_dir runs/llada2_flash \
+        --use_tp \
+      	--parallel_decoding threshold \
+      	--threshold 0.9 \
+      	--cache prefix \
+      	--use_bd
+  ```
+
+  - LLaDA2-mini Dataset profiling (threshold decoder, TP across 4 GPUs):
+
+  ```bash
+  python benchmarks/benchmark_dataset_sglang.py \
+        --model_name inclusionAI/LLaDA2.0-mini \
+        --dataset dataset_path \
+        --gen_len 2048 \
+        --block_length 32 \
+        --gpu 0,1,2,3 \
+        --output_dir runs/llada2_mini \
+        --use_tp \
+      	--parallel_decoding threshold \
+      	--threshold 0.9 \
+      	--cache prefix \
+      	--use_bd
+  ```
+
+- **LLaDA, LLaDA1.5 and LLaDA-MoE model** 
+
+  - LLaDA-MoE Dataset profiling (threshold decoder, TP across 4 GPUs):
+
   ```bash
   python benchmarks/benchmark_dataset.py \
-    --model_name inclusionAI/LLaDA-MoE-7B-A1B-Instruct \
-    --model_type llada_moe \
-    --dataset dataset_path \
-    --gen_len 1024 \
-    --block_length 64 \
-    --gpu 0,1,2,3 \
-    --output_dir runs/llada_moe_threshold \
-    --use_tp \
-    --parallel_decoding threshold \
-    --threshold 0.8 \
-    --cache dual \
-    --prefix_look 16 \
-    --after_look 16 \
-    --warmup_times 4 \
-    --cont_weight 0.3
+  --model_name inclusionAI/LLaDA-MoE-7B-A1B-Instruct \
+  --model_type llada_moe \
+  --dataset dataset_path \
+  --gen_len 1024 \
+  --block_length 64 \
+  --gpu 0,1,2,3 \
+  --output_dir runs/llada_moe_threshold \
+  --use_tp \
+  --parallel_decoding threshold \
+  --threshold 0.8 \
+  --cache dual \
+  --prefix_look 16 \
+  --after_look 16 \
+  --warmup_times 4 \
+  --cont_weight 0.3
   ```
-  - Example 2 Dataset profiling (LLaDA2-flash, threshold decoder, TP across 4 GPUs):
-  ```bash
-    python benchmarks/benchmark_dataset.py \
-      --model_name inclusionAI/LLaDA2.0-flash-preview \
-      --model_type llada2 \
-      --dataset dataset_path \
-      --gen_len 2048 \
-      --block_length 32 \
-      --gpu 0,1,2,3 \
-      --output_dir runs/llada2_flash \
-      --use_tp \
-      --parallel_decoding threshold \
-      --threshold 0.9 \
-      --cache prefix \
-      --use_bd
-  ```
-   - Example 3 Single-sample profiling (LLaDA-8B-Instruct, threshold decoder, TP across 4 GPUs):
+
+  - LLaDA Single-sample profiling (threshold decoder, TP across 4 GPUs):
+
   ```bash
   python benchmarks/benchmark.py \
     --model_name GSAI-ML/LLaDA-8B-Instruct \
@@ -155,49 +184,47 @@ model = AutoModelForCausalLM.from_pretrained(m, trust_remote_code=True, torch_dt
     --threshold 0.9 \
     --cache prefix
   ```
-  - Example 4: Single-sample profiling (LLaDA2-mini, threshold decoder, TP across 4 GPUs):
-  ```bash
-  python benchmarks/benchmark.py \
-    --model_name inclusionAI/LLaDA2.0-mini-preview \
-    --model_type llada2 \
-    --gen_len 2048 \
-    --block_length 32 \
-    --gpu 0,1,2,3 \
-    --use_tp \
-    --parallel_decoding threshold \
-    --threshold 0.9 \
-    --cache prefix \
-    --use_bd
-  ```
 
+  - LLaDA, LLaDA1.5, LLaDA-MoE can use benchmark_dataset.py and benchmark.py. 
 
-- **Evaluation (speed + accuracy)**
-  - Built on HuggingFace `lm-eval-harness` to compute TPS and benchmark scores.
-  - Tasks provided:
-    - `gsm8k_llada`: math reasoning.
-    - `mbpp_sanitized_llada`: sanitized Python code generation.
-  - For more examples and comprehensive instructions, see [our quickstart guide](evaluations/eval_guide.md).
- 
+#### Evaluation with lm-eval (speed + accuracy)
+
+- Built on HuggingFace `lm-eval-harness` to compute TPS and benchmark scores.
+- Tasks provided:
+  - `gsm8k_llada`: math reasoning.
+  - `mbpp_sanitized_llada`: sanitized Python code generation.
+- For more examples and comprehensive instructions, see [our quickstart guide](https://github.com/inclusionAI/dInfer/blob/master/evaluations/eval_guide.md).
+
 ## Benchmark Results
 
+### The inference speed (TPS) on LLaDA-MoE
+
+dInfer delivers over 1,100 TPS at batch size 1 on HumanEval and on average 800+ TPS across six benchmarks on a single node with 8×H800 GPUs.
 <p align="center">
   <img src="assets/dinfer_tps.png" alt="dInfer v0.1 speedup" width="600">
   <br>
-  <b>Figure</b>: Benchmark results
+  <b>Figure</b>: Benchmark results on LLaDA-MoE
 </p>
-
-**Performance on HumanEval:**
-- Over 1,100 TPS at batch size 1
-- Averages 800+ TPS across six benchmarks on a single node with 8×H800 GPUs
 
 **Speedup comparisons:**
 - 10× faster than Fast-dLLM while maintaining accuracy
 - 2-3× faster than Qwen2.5-3B on vLLM (LLaDA-MoE) with comparable quality
 
+### The inference speed (TPS) on LLaDA2-flash-CAP
+
+The inference speed is measured on LLaDA2-flash-CAP (with 100B parameters) on 8 H20 GPUs (parallel decoding threshold=0.95).
+
+| Benchmark        | batch size = 1 | batch size = 32 |
+|------------------|----------------|-----------------|
+| openai_humaneval | 753.10         | 2558.51         |
+| gsm8k            | 591.90         | 2111.79         |
+| IFEval           | 222.60         | 931.89          |
+| CruxEval-O       | 562.90         | 1967.08         |
+| mbpp             | 773.00         | 2262.45         |
+| AVG              | 580.70         | 1966.34         |
+
 ## Limitations
-- **LLaDA2**: Max 4-way TP (due to 4 attention heads), LLaDA Dense/MoE models support up to 8-way TP
 - **Block Diffusion**: Not supported on LLaDA Dense/MoE models (use `--use_bd` with LLaDA2 only)
-- **Evaluation**: `lm-eval` evaluations currently configured for LLaDA-MoE only, will add support for LLaDA Dense/LLaDA2 in the near future.
 
 ## Contact us
 - Wechat Group
