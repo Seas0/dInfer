@@ -708,7 +708,8 @@ class DInferEvalHarness(LM):
                 run_benchmark(1, 0, gpus[0], self.tokenizer, args)
             else:
                 for i, gpu in enumerate(gpus):
-                    p = Process(target=run_benchmark, args=(len(gpus), i, gpu, self.tokenizer, args))
+                    ctx = mp.get_context('spawn')
+                    p = ctx.Process(target=run_benchmark, args=(len(gpus), i, gpu, self.tokenizer, args))
                     p.daemon = True
                     procs.append(p)
                     p.start()
@@ -724,6 +725,5 @@ class DInferEvalHarness(LM):
 
 
 if __name__ == "__main__":
-    mp.set_start_method("spawn", force=True)
     set_seed(1234)
     cli_evaluate()
